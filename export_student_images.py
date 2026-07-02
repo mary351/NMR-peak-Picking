@@ -194,7 +194,7 @@ def _overlay_peaks(ax, peaks, ppm_h_axis, ppm_n_axis, H, W):
             markeredgewidth=2.0,
             zorder=5,
         )
-        ax.text(
+        ax.text( 
             pn + 0.15, ph,           # slight offset so label doesn't overlap circle
             str(k + 1),
             fontsize=7,
@@ -294,18 +294,71 @@ def main():
         spectra, peak_lists, _, meta = HSQCGenerator.load_dataset(args.load_dataset)
         ppm_h_axis = meta["ppm_h_axis"]
         ppm_n_axis = meta["ppm_n_axis"]
+   
     elif args.generate:
-        gen = HSQCGenerator(num_samples=args.n_samples)
-        spectra, peak_lists, _ = gen.generate_dataset(noise_level=args.noise_level)
-        ppm_h_axis, ppm_n_axis = gen.ppm_h, gen.ppm_n
-    else:
-        parser.error("Provide --load-dataset PATH or --generate")
 
-    export_student_dataset(
-        spectra, peak_lists, ppm_h_axis, ppm_n_axis,
-        out_dir=args.out,
-        dpi=args.dpi,
-    )
+        NOISE_LEVELS    = [0, 0.02, 0.05, 0.10, 0.5]
+        # N_PER_LEVEL     = 2000
+        N_PER_LEVEL     = 5700
+        TRAIN_FRAC      = 0.80
+        VAL_FRAC        = 0.10
+        # TEST_FRAC     = 0.15 (remainder)
+        SEED            = 42
+
+        gen = HSQCGenerator(n_points_h=256, n_points_n=32, num_samples=N_PER_LEVEL)
+
+        rng = np.random.default_rng(SEED)
+
+        tr_spectra, tr_peaks, tr_ppm = [], [], []
+        va_spectra, va_peaks, va_ppm = [], [], []
+        te_spectra, te_peaks, te_ppm = [], [], []
+
+        for nl in NOISE_LEVELS:
+            print(f"Generating noise={nl:.2f} ...")
+            spectra, peak_lists, ppm_lists = gen.generate_dataset(noise_level=nl)
+
+            # shuffle within this noise level before slicing
+            idx = rng.permutation(N_PER_LEVEL)
+            spectra    = spectra[idx]
+            peak_lists = [peak_lists[i] for i in idx]
+            ppm_lists  = [ppm_lists[i]  for i in idx]
+
+            n_train = int(N_PER_LEVEL * TRAIN_FRAC)
+            n_val   = int(N_PER_LEVEL * VAL_FRAC)     
+
+            tr_spectra.append(spectra[:n_train]);              tr_peaks.extend(peak_lists[:n_train]);              tr_ppm.extend(ppm_lists[:n_train])
+            va_spectra.append(spectra[n_train:n_train+n_val]); va_peaks.extend(peak_lists[n_train:n_train+n_val]); va_ppm.extend(ppm_lists[n_train:n_train+n_val])
+            te_spectra.append(spectra[n_train+n_val:]);        te_peaks.extend(peak_lists[n_train+n_val:]);        te_ppm.extend(ppm_lists[n_train+n_val:])
+
+        # concatenate across noise levels
+        tr_spectra = np.concatenate(tr_spectra, axis=0)
+        va_spectra = np.concatenate(va_spectra, axis=0)
+        te_spectra = np.concatenate(te_spectra, axis=0)
+
+        # save — reuses save_dataset unchanged
+        HSQCGenerator.save_dataset("hsqc_train.npz", tr_spectra, tr_peaks, tr_ppm,
+                                    ppm_h_axis=gen.ppm_h, ppm_n_axis=gen.ppm_n)
+        HSQCGenerator.save_dataset("hsqc_val.npz",   va_spectra, va_peaks, va_ppm,
+                                    ppm_h_axis=gen.ppm_h, ppm_n_axis=gen.ppm_n)
+        HSQCGenerator.save_dataset("hsqc_test.npz",  te_spectra, te_peaks, te_ppm,
+                                    ppm_h_axis=gen.ppm_h, ppm_n_axis=gen.ppm_n)
+        
+
+        export_student_dataset(tr_spectra, tr_peaks, gen.ppm_h, gen.ppm_n, out_dir="train_images")
+        export_student_dataset(va_spectra, va_peaks, gen.ppm_h, gen.ppm_n, out_dir="val_images")
+        export_student_dataset(te_spectra, te_peaks, gen.ppm_h, gen.ppm_n, out_dir="test_images")
+                
+        #     gen = HSQCGenerator(num_samples=args.n_samples)
+        #     spectra, peak_lists, _ = gen.generate_dataset(noise_level=args.noise_level)
+        #     ppm_h_axis, ppm_n_axis = gen.ppm_h, gen.ppm_n
+        # else:
+        #     parser.error("Provide --load-dataset PATH or --generate")
+
+        # export_student_dataset(
+        #     spectra, peak_lists, ppm_h_axis, ppm_n_axis,
+        #     out_dir=args.out,
+        #     dpi=args.dpi,
+        # )
 
     if args.contour:
         export_with_contours(
